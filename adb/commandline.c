@@ -37,11 +37,6 @@
 #include "adb_client.h"
 #include "file_sync_service.h"
 
-#ifdef SH_HISTORY
-#include "shlist.h"
-#include "history.h"
-#endif
-
 enum {
     IGNORE_DATA,
     WIPE_DATA,
@@ -105,8 +100,12 @@ void help()
         "                                 environment variable is used, which must\n"
         "                                 be an absolute path.\n"
         " devices                       - list all connected devices\n"
-        " connect <host>:<port>         - connect to a device via TCP/IP"
-        " disconnect <host>:<port>      - disconnect from a TCP/IP device"
+        " connect <host>[:<port>]       - connect to a device via TCP/IP\n"
+        "                                 Port 5555 is used by default if no port number is specified.\n"
+        " disconnect [<host>[:<port>]]  - disconnect from a TCP/IP device.\n"
+        "                                 Port 5555 is used by default if no port number is specified.\n"
+        "                                 Using this ocmmand with no additional arguments\n"
+        "                                 will disconnect from all connected TCP/IP devices.\n"
         "\n"
         "device commands:\n"
         "  adb push <local> <remote>    - copy file/dir to device\n"
@@ -170,6 +169,12 @@ void help()
         "\n"
         "  - If it is \"system\" or \"data\", only the corresponding partition\n"
         "    is updated.\n"
+        "\n"
+        "environmental variables:\n"
+        "  ADB_TRACE                    - Print debug information. A comma separated list of the following values\n"
+        "                                 1 or all, adb, sockets, packets, rwx, usb, sync, sysdeps, transport, jdwp\n"
+        "  ANDROID_SERIAL               - The serial number to connect to. -s takes priority over this if given.\n"
+        "  ANDROID_LOG_TAGS             - When used with the logcat option, only these debug tags are printed.\n"
         );
 }
 
@@ -221,28 +226,15 @@ static void read_and_dump(int fd)
             if(errno == EINTR) continue;
             break;
         }
-        /* we want to output to stdout, so no adb_write here !! */
-        unix_write(1, buf, len);
+        fwrite(buf, 1, len, stdout);
+        fflush(stdout);
     }
 }
-
-#ifdef SH_HISTORY
-int shItemCmp( void *val, void *idata )
-{
-    return( (strcmp( val, idata ) == 0) );
-}
-#endif
 
 static void *stdin_read_thread(void *x)
 {
     int fd, fdi;
     unsigned char buf[1024];
-#ifdef SH_HISTORY
-    unsigned char realbuf[1024], *buf_ptr;
-    SHLIST history;
-    SHLIST *item = &history;
-    int cmdlen = 0, ins_flag = 0;
-#endif
     int r, n;
     int state = 0;
 
@@ -251,9 +243,6 @@ static void *stdin_read_thread(void *x)
     fdi = fds[1];
     free(fds);
 
-#ifdef SH_HISTORY
-    shListInitList( &history );
-#endif
     for(;;) {
         /* fdi is really the client's stdin, so use read, not adb_read here */
         r = unix_read(fdi, buf, 1024);
@@ -262,97 +251,34 @@ static void *stdin_read_thread(void *x)
             if(errno == EINTR) continue;
             break;
         }
-#ifdef SH_HISTORY
-        if( (r == 3) &&                                       /* Arrow processing */
-            (memcmp( (void *)buf, SH_ARROW_ANY, 2 ) == 0) ) {
-            switch( buf[2] ) {
-                case SH_ARROW_UP:
-                    item = shListGetNextItem( &history, item );
-                    break;
-                case SH_ARROW_DOWN:
-                    item = shListGetPrevItem( &history, item );
-                    break;
-                default:
-                    item = NULL;
-                    break;
-            }
-            memset( buf, SH_DEL_CHAR, cmdlen );
-            if( item != NULL ) {
-                n = snprintf( (char *)(&buf[cmdlen]), sizeof buf - cmdlen, "%s", (char *)(item->data) );
-                memcpy( realbuf, item->data, n );
-            }
-            else { /* Clean buffer */
-                item = &history;
-                n = 0;
-            }
-            r = n + cmdlen;
-            cmdlen = n;
-            ins_flag = 0;
-            if( r == 0 )
-                continue;
-        }
-        else {
+        for(n = 0; n < r; n++){
+            switch(buf[n]) {
+            case '\n':
+                state = 1;
+                break;
+            case '\r':
+                state = 1;
+                break;
+            case '~':
+                if(state == 1) state++;
+                break;
+            case '.':
+                if(state == 2) {
+                    fprintf(stderr,"\n* disconnect *\n");
+#ifdef HAVE_TERMIO_H
+                    stdin_raw_restore(fdi);
 #endif
-            for(n = 0; n < r; n++){
-                switch(buf[n]) {
-                case '\n':
-#ifdef SH_HISTORY
-                    if( ins_flag && (SH_BLANK_CHAR <= realbuf[0]) ) {
-                        buf_ptr = malloc(cmdlen + 1);
-                        if( buf_ptr != NULL ) {
-                            memcpy( buf_ptr, realbuf, cmdlen );
-                            buf_ptr[cmdlen] = '\0';
-                            if( (item = shListFindItem( &history, (void *)buf_ptr, shItemCmp )) == NULL ) {
-                                shListInsFirstItem( &history, (void *)buf_ptr );
-                                item = &history;
-                            }
-                        }
-                    }
-                    cmdlen = 0;
-                    ins_flag = 0;
-#endif
-                    state = 1;
-                    break;
-                case '\r':
-                    state = 1;
-                    break;
-                case '~':
-                    if(state == 1) state++;
-                    break;
-                case '.':
-                    if(state == 2) {
-                        fprintf(stderr,"\n* disconnect *\n");
-    #ifdef HAVE_TERMIO_H
-                        stdin_raw_restore(fdi);
-    #endif
-                        exit(0);
-                    }
-                default:
-#ifdef SH_HISTORY
-                    if( buf[n] == SH_DEL_CHAR ) {
-                        if( cmdlen > 0 )
-                            cmdlen--;
-                    }
-                    else {
-                        realbuf[cmdlen] = buf[n];
-                        cmdlen++;
-                    }
-                    ins_flag = 1;
-#endif
-                    state = 0;
+                    exit(0);
                 }
+            default:
+                state = 0;
             }
-#ifdef SH_HISTORY
         }
-#endif
         r = adb_write(fd, buf, r);
         if(r <= 0) {
             break;
         }
     }
-#ifdef SH_HISTORY
-    shListDelAllItems( &history, (shListFree)free );
-#endif
     return 0;
 }
 
@@ -761,6 +687,7 @@ int adb_commandline(int argc, char **argv)
     int quote;
     transport_type ttype = kTransportAny;
     char* serial = NULL;
+    char* server_port_str = NULL;
 
         /* If defined, this should be an absolute path to
          * the directory containing all of the various system images
@@ -776,7 +703,20 @@ int adb_commandline(int argc, char **argv)
 
     serial = getenv("ANDROID_SERIAL");
 
-        /* modifiers and flags */
+    /* Validate and assign the server port */
+    server_port_str = getenv("ANDROID_ADB_SERVER_PORT");
+    int server_port = DEFAULT_ADB_PORT;
+    if (server_port_str && strlen(server_port_str) > 0) {
+        server_port = (int) strtol(server_port_str, NULL, 0);
+        if (server_port <= 0) {
+            fprintf(stderr,
+                    "adb: Env var ANDROID_ADB_SERVER_PORT must be a positive number. Got \"%s\"\n",
+                    server_port_str);
+            return usage();
+        }
+    }
+
+    /* modifiers and flags */
     while(argc > 0) {
         if(!strcmp(argv[0],"nodaemon")) {
             no_daemon = 1;
@@ -805,7 +745,7 @@ int adb_commandline(int argc, char **argv)
             if (isdigit(argv[0][2])) {
                 serial = argv[0] + 2;
             } else {
-                if(argc < 2) return usage();
+                if(argc < 2 || argv[0][2] != '\0') return usage();
                 serial = argv[1];
                 argc--;
                 argv++;
@@ -823,12 +763,13 @@ int adb_commandline(int argc, char **argv)
     }
 
     adb_set_transport(ttype, serial);
+    adb_set_tcp_specifics(server_port);
 
     if ((argc > 0) && (!strcmp(argv[0],"server"))) {
         if (no_daemon || is_daemon) {
-            r = adb_main(is_daemon);
+            r = adb_main(is_daemon, server_port);
         } else {
-            r = launch_server();
+            r = launch_server(server_port);
         }
         if(r) {
             fprintf(stderr,"* could not start server *\n");
@@ -856,13 +797,33 @@ top:
         }
     }
 
-    if(!strcmp(argv[0], "connect") || !strcmp(argv[0], "disconnect")) {
+    if(!strcmp(argv[0], "connect")) {
         char *tmp;
         if (argc != 2) {
-            fprintf(stderr, "Usage: adb %s <host>:<port>\n", argv[0]);
+            fprintf(stderr, "Usage: adb connect <host>[:<port>]\n");
             return 1;
         }
-        snprintf(buf, sizeof buf, "host:%s:%s", argv[0], argv[1]);
+        snprintf(buf, sizeof buf, "host:connect:%s", argv[1]);
+        tmp = adb_query(buf);
+        if(tmp) {
+            printf("%s\n", tmp);
+            return 0;
+        } else {
+            return 1;
+        }
+    }
+
+    if(!strcmp(argv[0], "disconnect")) {
+        char *tmp;
+        if (argc > 2) {
+            fprintf(stderr, "Usage: adb disconnect [<host>[:<port>]]\n");
+            return 1;
+        }
+        if (argc == 2) {
+            snprintf(buf, sizeof buf, "host:disconnect:%s", argv[1]);
+        } else {
+            snprintf(buf, sizeof buf, "host:disconnect:");
+        }
         tmp = adb_query(buf);
         if(tmp) {
             printf("%s\n", tmp);
@@ -893,10 +854,10 @@ top:
             /* quote empty strings and strings with spaces */
             quote = (**argv == 0 || strchr(*argv, ' '));
             if (quote)
-            	strcat(buf, "\"");
+                strcat(buf, "\"");
             strcat(buf, *argv++);
             if (quote)
-            	strcat(buf, "\"");
+                strcat(buf, "\"");
         }
 
         for(;;) {
