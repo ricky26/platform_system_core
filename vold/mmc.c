@@ -157,6 +157,10 @@ static int mmc_bootstrap_card(char *sysfs_path)
 	}
 
     p[strlen(p) - 1] = '\0';
+    if (strcmp(p, "SDIO") == 0) {
+	    free(p);
+	    return 0;
+    }
     sprintf(tmp, "MMC_TYPE=%s", p);
     free(p);
     uevent_params[1] = (char *) strdup(tmp);
