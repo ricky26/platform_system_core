@@ -150,6 +150,12 @@ static int mmc_bootstrap_card(char *sysfs_path)
 
     sprintf(filename, "/sys%s/type", devpath);
     p = read_file(filename, &sz);
+	if(p == NULL)
+	{
+		LOGE("Found a non-identifiable mmc at '%s'! Skipping...\n", devpath);
+		return -ENODEV;
+	}
+
     p[strlen(p) - 1] = '\0';
     sprintf(tmp, "MMC_TYPE=%s", p);
     free(p);
@@ -157,6 +163,12 @@ static int mmc_bootstrap_card(char *sysfs_path)
 
     sprintf(filename, "/sys%s/name", devpath);
     p = read_file(filename, &sz);
+	if(p == NULL)
+	{
+		LOGE("Found an mmc with no name! Skipping...\n");
+		return -ENODEV;
+	}
+
     p[strlen(p) - 1] = '\0';
     sprintf(tmp, "MMC_NAME=%s", p);
     free(p);

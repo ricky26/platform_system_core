@@ -33,6 +33,7 @@
 #include "ums.h"
 #include "format.h"
 #include "devmapper.h"
+#include "loop.h"
 
 #include "volmgr_ext3.h"
 #include "volmgr_vfat.h"
@@ -298,7 +299,9 @@ int volmgr_start_volume_by_mountpoint(char *mount_point)
             LOGE("volmgr failed to start devmapper volume '%s'",
                  v->mount_point);
         }
-    } else if (v->media_type == media_mmc) {
+    }
+	else //if (v->media_type == media_mmc)
+	{
         if (!v->dev) {
             LOGE("Cannot start volume '%s' (volume is not bound)", mount_point);
             pthread_mutex_unlock(&v->lock);
@@ -853,10 +856,11 @@ static int volmgr_config_volume(cnode *node)
     volume_t *new;
     int rc = 0, i;
 
-    char *dm_src, *dm_src_type, *dm_tgt, *dm_param, *dm_tgtfs;
+    char *dm_src, *dm_src_type, *dm_tgt, *dm_param, *dm_tgtfs, *loop_src;
     uint32_t dm_size_mb = 0;
+	blkdev_t *loop_dev;
 
-    dm_src = dm_src_type = dm_tgt = dm_param = dm_tgtfs = NULL;
+    dm_src = dm_src_type = dm_tgt = dm_param = dm_tgtfs = loop_src= NULL;
 #if DEBUG_VOLMGR
     LOG_VOL("volmgr_configure_volume(%s):", node->name);
 #endif
@@ -880,6 +884,8 @@ static int volmgr_config_volume(cnode *node)
                 new->media_type = media_mmc;
             else if (!strcmp(child->value, "devmapper"))
                 new->media_type = media_devmapper;
+			else if (!strcmp(child->value, "loop"))
+				new->media_type = media_loop;
             else {
                 LOGE("Invalid media type '%s'", child->value);
                 rc = -EINVAL;
@@ -887,6 +893,8 @@ static int volmgr_config_volume(cnode *node)
             }
         } else if (!strcmp(child->name, "mount_point"))
             new->mount_point = strdup(child->value);
+		else if(!strcmp(child->name, "loop_src"))
+			loop_src = strdup(child->value);
         else if (!strcmp(child->name, "ums_path"))
             new->ums_path = strdup(child->value);
         else if (!strcmp(child->name, "dm_src")) 
@@ -929,6 +937,30 @@ static int volmgr_config_volume(cnode *node)
         LOG_VOL("media path for devmapper volume = '%s'", dm_mediapath);
         volmgr_add_mediapath_to_volume(new, dm_mediapath);
     }
+	else if (new->media_type == media_loop) {
+		if(loop_src == NULL)
+		{
+            LOGE("Required configuration parameter missing for loopback volume.");
+            rc = -EINVAL;
+            goto out_free;
+		}
+
+		loop_dev = loop_init(new, loop_src);
+		if(loop_dev == NULL)
+		{
+			LOGE("Failed to initialise loopback device!");
+			rc = -ENODEV;
+			goto out_free;
+		}
+
+		volmgr_add_mediapath_to_volume(new, loop_dev->devpath);
+		
+		int rc = _volmgr_consider_disk_and_vol(new, loop_dev);
+		if(rc < 0)
+		{
+			LOGE("Failed to consider loopback device!");
+		}
+	}
 
     if (!vol_root)
         vol_root = new;
@@ -949,6 +981,8 @@ static int volmgr_config_volume(cnode *node)
         free(dm_param);
     if (dm_tgtfs)
         free(dm_tgtfs);
+	if (loop_src)
+		free(loop_src);
 
     return rc;
 
@@ -964,6 +998,8 @@ static int volmgr_config_volume(cnode *node)
         free(dm_param);
     if (dm_tgtfs)
         free(dm_tgtfs);
+	if (loop_src)
+		free(loop_src);
 
 
     for (i = 0; i < VOLMGR_MAX_MEDIAPATHS_PER_VOLUME; i++) {
