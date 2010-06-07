@@ -50,7 +50,7 @@ enum {
 
 static int do_cmd(transport_type ttype, char* serial, char *cmd, ...);
 
-void get_my_path(char s[PATH_MAX]);
+void get_my_path(char *s, size_t maxLen);
 int find_sync_dirs(const char *srcarg,
         char **android_srcdir_out, char **data_srcdir_out);
 int install_app(transport_type transport, char* serial, int argc, char** argv);
@@ -110,8 +110,9 @@ void help()
         "\n"
         "device commands:\n"
         "  adb push <local> <remote>    - copy file/dir to device\n"
-        "  adb pull <remote> <local>    - copy file/dir from device\n"
+        "  adb pull <remote> [<local>]  - copy file/dir from device\n"
         "  adb sync [ <directory> ]     - copy host->device only if changed\n"
+        "                                 (-l means list but don't copy)\n"
         "                                 (see 'adb help all')\n"
         "  adb shell                    - run remote shell interactively\n"
         "  adb shell <command>          - run remote shell command\n"
@@ -151,8 +152,9 @@ void help()
         "  adb status-window            - continuously print device status for a specified device\n"
         "  adb remount                  - remounts the /system partition on the device read-write\n"
         "  adb reboot [bootloader|recovery] - reboots the device, optionally into the bootloader or recovery program\n"
+        "  adb reboot-bootloader        - reboots the device into the bootloader\n"
         "  adb root                     - restarts the adbd daemon with root permissions\n"
-        "  adb usb                      - restarts the adbd daemon listening on USB"
+        "  adb usb                      - restarts the adbd daemon listening on USB\n"
         "  adb tcpip <port>             - restarts the adbd daemon listening on TCP on the specified port"
         "\n"
         "networking:\n"
@@ -673,7 +675,7 @@ static char *find_top(char path_buf[PATH_MAX])
         /* If the CWD isn't under a good-looking top, see if the
          * executable is.
          */
-        get_my_path(dir);
+        get_my_path(dir, PATH_MAX);
         top = find_top_from(dir, path_buf);
     }
     return top;
@@ -929,10 +931,13 @@ top:
     }
 
     if(!strcmp(argv[0], "remount") || !strcmp(argv[0], "reboot")
+            || !strcmp(argv[0], "reboot-bootloader")
             || !strcmp(argv[0], "tcpip") || !strcmp(argv[0], "usb")
             || !strcmp(argv[0], "root")) {
         char command[100];
-        if (argc > 1)
+        if (!strcmp(argv[0], "reboot-bootloader"))
+            snprintf(command, sizeof(command), "reboot:bootloader");
+        else if (argc > 1)
             snprintf(command, sizeof(command), "%s:%s", argv[0], argv[1]);
         else
             snprintf(command, sizeof(command), "%s:", argv[0]);
@@ -947,10 +952,8 @@ top:
     }
 
     if(!strcmp(argv[0], "bugreport")) {
-        if (argc != 1) {
-            return 1;
-        }
-        do_cmd(ttype, serial, "shell", "dumpstate", "-", 0);
+        if (argc != 1) return usage();
+        do_cmd(ttype, serial, "shell", "bugreport", 0);
         return 0;
     }
 
@@ -990,9 +993,13 @@ top:
     if(!strcmp(argv[0], "forward")) {
         if(argc != 3) return usage();
         if (serial) {
-            snprintf(buf, sizeof buf, "host-serial:%s:forward:%s;%s",serial,argv[1],argv[2]);
+            snprintf(buf, sizeof buf, "host-serial:%s:forward:%s;%s",serial, argv[1], argv[2]);
+        } else if (ttype == kTransportUsb) {
+            snprintf(buf, sizeof buf, "host-usb:forward:%s;%s", argv[1], argv[2]);
+        } else if (ttype == kTransportLocal) {
+            snprintf(buf, sizeof buf, "host-local:forward:%s;%s", argv[1], argv[2]);
         } else {
-            snprintf(buf, sizeof buf, "host:forward:%s;%s",argv[1],argv[2]);
+            snprintf(buf, sizeof buf, "host:forward:%s;%s", argv[1], argv[2]);
         }
         if(adb_command(buf)) {
             fprintf(stderr,"error: %s\n", adb_error());
@@ -1014,8 +1021,13 @@ top:
     }
 
     if(!strcmp(argv[0], "pull")) {
-        if(argc != 3) return usage();
-        return do_sync_pull(argv[1], argv[2]);
+        if (argc == 2) {
+            return do_sync_pull(argv[1], ".");
+        } else if (argc == 3) {
+            return do_sync_pull(argv[1], argv[2]);
+        } else {
+            return usage();
+        }
     }
 
     if(!strcmp(argv[0], "install")) {
@@ -1030,10 +1042,19 @@ top:
 
     if(!strcmp(argv[0], "sync")) {
         char *srcarg, *android_srcpath, *data_srcpath;
+        int listonly = 0;
+
         int ret;
         if(argc < 2) {
             /* No local path was specified. */
             srcarg = NULL;
+        } else if (argc >= 2 && strcmp(argv[1], "-l") == 0) {
+            listonly = 1;
+            if (argc == 3) {
+                srcarg = argv[2];
+            } else {
+                srcarg = NULL;
+            }
         } else if(argc == 2) {
             /* A local path or "android"/"data" arg was specified. */
             srcarg = argv[1];
@@ -1044,9 +1065,9 @@ top:
         if(ret != 0) return usage();
 
         if(android_srcpath != NULL)
-            ret = do_sync_sync(android_srcpath, "/system");
+            ret = do_sync_sync(android_srcpath, "/system", listonly);
         if(ret == 0 && data_srcpath != NULL)
-            ret = do_sync_sync(data_srcpath, "/data");
+            ret = do_sync_sync(data_srcpath, "/data", listonly);
 
         free(android_srcpath);
         free(data_srcpath);

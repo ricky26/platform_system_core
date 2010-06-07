@@ -51,10 +51,15 @@
 #define VENDOR_ID_ACER          0x0502
 // Sony Ericsson's USB Vendor ID
 #define VENDOR_ID_SONY_ERICSSON 0x0FCE
+// Foxconn's USB Vendor ID
+#define VENDOR_ID_FOXCONN       0x0489
 // Dell's USB Vendor ID
 #define VENDOR_ID_DELL          0x413c
+// Nvidia's USB Vendor ID
+#define VENDOR_ID_NVIDIA        0x0955
 // Garmin-Asus's USB Vendor ID
 #define VENDOR_ID_GARMIN_ASUS   0x091E
+
 
 /** built-in vendor list */
 int builtInVendorIds[] = {
@@ -66,7 +71,9 @@ int builtInVendorIds[] = {
     VENDOR_ID_HUAWEI,
     VENDOR_ID_ACER,
     VENDOR_ID_SONY_ERICSSON,
+    VENDOR_ID_FOXCONN,
     VENDOR_ID_DELL,
+    VENDOR_ID_NVIDIA,
     VENDOR_ID_GARMIN_ASUS,
 };
 

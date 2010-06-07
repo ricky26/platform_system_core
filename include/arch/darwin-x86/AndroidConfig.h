@@ -86,6 +86,11 @@
 #define  HAVE_TERMIO_H
 
 /*
+ * Define this if you have <sys/sendfile.h>
+ */
+/* #define  HAVE_SYS_SENDFILE_H 1 */
+
+/*
  * Define this if you build against MSVCRT.DLL
  */
 /* #define HAVE_MS_C_RUNTIME */
@@ -141,7 +146,7 @@
  */
 #if (defined(__ppc__) || defined(__ppc64__))
 #   define HAVE_BIG_ENDIAN
-#elif defined(__i386__)
+#elif (defined(__i386__) || defined(__x86_64__))
 #   define HAVE_LITTLE_ENDIAN
 #endif
 
@@ -214,7 +219,7 @@
  */
 #if (defined(__ppc__) || defined(__ppc64__))
 #   define ARCH_PPC
-#elif defined(__i386__)
+#elif (defined(__i386__) || defined(__x86_64__))
 #   define ARCH_X86
 #endif
 
